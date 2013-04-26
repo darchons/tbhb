@@ -90,7 +90,7 @@ class SPIDev(object):
         confdir = os.path.sep.join(['', 'etc', 'modprobe.d'])
         if os.path.isdir(confdir):
             if verbose:
-                print >> sys.stderr, 'Looking for blacklists under %s\n' % confdir
+                print >> sys.stderr, 'Looking for blacklists under %s' % confdir
             for conf in os.listdir(confdir):
                 conf = os.path.join(confdir, conf)
                 if not os.path.isfile(conf):
@@ -154,8 +154,8 @@ class SPIDev(object):
         devpath = os.path.sep + 'dev'
         for dev in os.listdir(devpath):
             devfull = os.path.join(devpath, dev)
-            if dev.startswith('spidev') and os.path.isfile(devfull):
-                devices.push(devfull)
+            if dev.startswith('spidev') and os.path.exists(devfull):
+                devices.append(devfull)
         return devices
 
     def __init__(self, dev, mode=None, bits_per_word=None,
@@ -205,7 +205,7 @@ class SPIDev(object):
     def _getProp(self, name, fmt, rd_ioctl):
         self._checkOpen()
         data = struct.pack(fmt, 0)
-        fcntl.fcntl(self._file, rd_ioctl, data)
+        data = fcntl.ioctl(self._file, rd_ioctl, data)
         value = struct.unpack(fmt, data)
         setattr(self, '_%s' % name, value)
         return value
@@ -218,7 +218,7 @@ class SPIDev(object):
             value < minimum or value > maximum):
             raise ValueError('invalid %s' % name)
         data = struct.pack(fmt, value)
-        fcntl.fcntl(self._file, wr_ioctl, data)
+        fcntl.ioctl(self._file, wr_ioctl, data)
         setattr(self, '_%s' % name, value)
 
     @property
@@ -365,7 +365,7 @@ class SPIDev(object):
 
         def getWordType(bpw):
             if (not isinstance(bpw, (int, long)) or
-                bpw < self.BITS_PER_WORD_MIN or bpw > BITS_PER_WORD_MAX):
+                bpw < self.BITS_PER_WORD_MIN or bpw > self.BITS_PER_WORD_MAX):
                 raise 'invalid bits per word'
             return (('B', 1) if bpw <= 8 else
                     ('H', 2) if bpw <= 16 else
@@ -417,8 +417,8 @@ class SPIDev(object):
                 txbuf = ctypes.create_string_buffer(t.data, len(t.data))
                 rxbuf = ctypes.create_string_buffer(len(t.data))
                 length = len(t.data)
-            txbufs.push(txbuf)
-            rxbufs.push(rxbuf)
+            txbufs.append(txbuf)
+            rxbufs.append(rxbuf)
             # spi_ioc_transfer structure
             msg += struct.pack('=QQLLHBBL',
                 ctypes.addressof(txbuf),
@@ -427,26 +427,27 @@ class SPIDev(object):
                 t.options.speed_hz if t.options else 0,
                 t.options.delay_usecs if t.options else 0,
                 t.options.bits_per_word if t.options else 0,
-                (1 if t.options.cs_change else 0) if t.options else 1)
-            rettypes.push(rettype)
-            wordtypes.push(getWordType(t.options.bits_per_word
+                (1 if t.options.cs_change else 0) if t.options else 1,
+                0)
+            rettypes.append(rettype)
+            wordtypes.append(getWordType(t.options.bits_per_word
                 if t.options else self._bits_per_word))
 
-        fcntl.fcntl(self._file, self._get_spi_ioc_message(len(transfers)), msg)
+        fcntl.ioctl(self._file, self._get_spi_ioc_message(len(transfers)), msg)
 
         ret = []
         for i, rxbuf in enumerate(rxbufs):
             retstr = rxbuf.raw
             if rettypes[i] is str:
-                ret.push(retstr)
+                ret.append(retstr)
                 continue
             unpacked = struct.unpack('=%d%s' %
                 (len(retstr) // wordtypes[i][1], wordtypes[i][0]), retstr)
             if issubclass(rettypes[i], (tuple, list)):
-                ret.push(rettypes[i](unpacked))
+                ret.append(rettypes[i](unpacked))
                 continue
             elif issubclass(rettypes[i], array.array):
-                ret.push(rettypes[i](wordtypes[i][0], unpacked))
+                ret.append(rettypes[i](wordtypes[i][0], unpacked))
                 continue
             assert False
         if isinstance(data, list):
@@ -477,7 +478,8 @@ if __name__ == '__main__':
 
     import argparse, struct
 
-    parser = argparse.ArgumentParser(description='Access an SPI device')
+    parser = argparse.ArgumentParser(description='Access an SPI device',
+        epilog=('Available devices: ' + ', '.join(SPIDev.get_devices())))
 
     CHOICES = ['install', 'r', 'read', 's', 'string']
     parser.add_argument('device', metavar='DEVICE',
@@ -507,7 +509,8 @@ if __name__ == '__main__':
 
     install_parser = command_parser.add_parser('install',
         help='install access to SPI device, '
-            'including enabling drivers and setting permissions')
+            'including enabling drivers and setting permissions '
+            '(needs root)')
     install_parser.set_defaults(run=install)
 
     def write(args):
@@ -558,14 +561,18 @@ if __name__ == '__main__':
         else:
             assert False
 
+    def python_int(string):
+        return int(string, 0)
     read_parser = command_parser.add_parser('read',
         help='read COUNT numbers of words and '
             'print the data in hex format')
-    read_parser.add_argument('data', nargs='+', metavar='COUNT', type=int,
+    read_parser.add_argument('data', nargs='+',
+        metavar='COUNT', type=python_int,
         help='number of words to read for each transfer')
     read_parser.set_defaults(run=write, action='r')
     read_parser = command_parser.add_parser('r')
-    read_parser.add_argument('data', nargs='+', metavar='COUNT', type=int,
+    read_parser.add_argument('data', nargs='+',
+        metavar='COUNT', type=python_int,
         help='number of words to read for each transfer')
     read_parser.set_defaults(run=write, action='r')
 
