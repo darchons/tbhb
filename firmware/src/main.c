@@ -366,13 +366,24 @@ SetFrameData(uintptr_t data)
 }
 
 static void
+FillFrame(uintptr_t data)
+{
+    intptr_t i, j;
+    for (j = LINES; j > 0; --j) {
+        for (i = WIDTH; i > 0; --i) {
+            SetFrameData(data); // Digest last line received
+        }
+    }
+}
+
+static void
 NextFrame(void)
 {
     intptr_t i;
     for (i = WIDTH - 1; i > 0; --i) {
         SetFrameData(0); // Digest last line received
     }
-    pyswitch_buffer = true;
+    g_switch_buffer = true;
     g_stage_index = ROUND_BUFFER_INDEX(g_stage_index + 1);
     g_stage = &g_buffers[g_stage_index];
     g_stage_line = (*g_stage)[LINES];
@@ -424,14 +435,18 @@ SSP1_IRQHandler(void)
         g_command = cmd = (enum HOST_COMMAND) data;
         if ((cmd & HOST_COMMAND_LENGTH_MASK) == HOST_COMMAND_VARIABLE) {
             g_command_length = COMMAND_LENGTH_VARIABLE;
+            return;
         } else {
-            g_command_length = (cmd >> HOST_COMMAND_LENGTH_SHIFT);
+            g_command_length = (((uintptr_t)cmd) >> HOST_COMMAND_LENGTH_SHIFT);
+            if (g_command_length) {
+                return;
+            }
         }
     } else if (length == COMMAND_LENGTH_VARIABLE) {
         g_command_length = (uintptr_t) data;
         return;
     } else {
-        g_command_length = length - 1;
+        g_command_length = length -= 1;
     }
     if ((cmd & HOST_ID_MASK) && g_command_id &&
             (cmd & HOST_ID_MASK) != g_command_id) {
@@ -452,6 +467,9 @@ SSP1_IRQHandler(void)
         break;
     case HOST_IREF:
         SetDriverIRef(data);
+        break;
+    case HOST_FILL:
+        FillFrame(data);
         break;
     case HOST_FRAME:
         SetFrameData(data);
