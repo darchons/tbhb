@@ -18,18 +18,21 @@ develop-eggs
 lib
 lib64
 
-# Installer logs
-pip-log.txt
+# Eagle files
+eagle/*.?#?
+eagle/eagle.epf
+eagle/*.bom.txt
+eagle/*.dri
+eagle/*.dru
+eagle/*.gpi
+eagle/gerber/*.zip
 
-# Unit test / coverage reports
-.coverage
-.tox
-nosetests.xml
+# LPCXpresso files
+firmware/*.launch
+firmware/.settings
+firmware/Release
+firmware/Debug
 
-# Translations
-*.mo
+# OS X file
+*.DS_Store
 
-# Mr Developer
-.mr.developer.cfg
-.project
-.pydevproject
