@@ -41,7 +41,7 @@ static volatile bool g_switch_buffer;
 static volatile size_t g_frame_index;
 static size_t g_stage_index;
 
-static uintptr_t g_program_interval[PROGRAM_SIZE - 1];
+static uintptr_t g_program_interval[PROGRAM_SIZE];
 static uintptr_t g_program_pos[PROGRAM_SIZE - 1];
 static uintptr_t g_program_bit[PROGRAM_SIZE - 1];
 static uintptr_t *g_frame_interval;
@@ -87,8 +87,8 @@ InitProgram(void)
     size_t program_index = 0;
     for (i = 1; i < BITS; ++i) {
         for (j = i - 1; j >= 0; --j) {
-            g_program_interval[program_index++] =
-                    ((j == 0) ? 1 : (1 << (j - 1))) - 1;
+            g_program_interval[PROGRAM_SIZE - program_index - 2] =
+                    ((j == 0) ? 1 : (1 << (j - 1))) * 2 - 1;
             g_program_pos[program_index] = CHANNELS * WIDTH - j - 1;
             g_program_bit[program_index] = (1 << i);
             program_index++;
@@ -96,13 +96,14 @@ InitProgram(void)
     }
     for (i = BITS - 1; i > 0; --i) {
         for (j = 0; j < i; ++j) {
-            g_program_interval[program_index++] =
-                    ((j + 1 == i) ? 1 : (1 << j)) - 1;
+            g_program_interval[PROGRAM_SIZE - program_index - 2] =
+                    ((j + 1 == i) ? 1 : (1 << j)) * 2 - 1;
             g_program_pos[program_index] = CHANNELS * WIDTH - i - 1;
             g_program_bit[program_index] = (1 << j);
             program_index++;
         }
     }
+    g_program_interval[PROGRAM_SIZE - 1] = 1;
     g_frame_interval = &g_program_interval[PROGRAM_SIZE];
 
     for (i = 0; i < LINES; ++i) {
@@ -114,6 +115,12 @@ InitProgram(void)
         g_program_csel[i] = MAKE_CSEL(0) | MAKE_CSEL(1) | MAKE_CSEL(2);
 #undef MAKE_CSEL
     }
+    for (i = 1; i < LINES; ++i) {
+        if (LINE_SEQUENCE[i] == 0) {
+            break;
+        }
+    }
+    g_frame_csel = &g_program_csel[i];
 }
 
 static void
@@ -133,6 +140,16 @@ InitHostSPI(void)
     // De-assert SSP1 reset signal
     LPC_SYSCON->PRESETCTRL |= PRESETCTRL_SSP1_RST_N;
 
+    // Set SSP1 configuration and start SSP1
+    while (LPC_SSP1->SR & SSP_SR_RNE) {
+        (void) LPC_SSP1->DR; // Clear out receive FIFO
+    }
+    LPC_SSP1->IMSC = SSP_IMSC_RTIM | SSP_IMSC_RXIM;
+    LPC_SSP1->CR0 = SSP_CR0(16, SSP_FRF_SPI,
+            SSP_CPOL_LO, SSP_CPHA_BACK_TO, 0);
+    LPC_SSP1->CR1 = SSP_CR1(SSP_LBM_NORMAL, SSP_SSE_ENABLED,
+            SSP_MS_SLAVE, SSP_SOD_OUTPUT_DISABLED);
+
     // MOSI
     LPC_IOCON->MOSI_PIO = IOCon_Digital(IOCON_FUNC_2, IOCON_MODE_INACTIVE,
             IOCON_HYS_DISABLED, IOCON_INV_NORMAL, IOCON_OD_DISABLED);
@@ -142,16 +159,6 @@ InitHostSPI(void)
     // /CS
     LPC_IOCON->CS_PIO = IOCon_Digital(IOCON_FUNC_2, IOCON_MODE_INACTIVE,
             IOCON_HYS_DISABLED, IOCON_INV_NORMAL, IOCON_OD_DISABLED);
-
-    // Set SSP1 configuration and start SSP1
-    while (LPC_SSP1->SR & SSP_SR_RNE) {
-        (void) LPC_SSP1->DR; // Clear out receive FIFO
-    }
-    LPC_SSP1->IMSC = SSP_IMSC_RTIM | SSP_IMSC_RXIM;
-    LPC_SSP1->CR0 = SSP_CR0(16, SSP_FRF_SPI,
-            SSP_CPOL_LO, SSP_CPHA_AWAY_FROM, 0);
-    LPC_SSP1->CR1 = SSP_CR1(SSP_LBM_NORMAL, SSP_SSE_ENABLED,
-            SSP_MS_SLAVE, SSP_SOD_OUTPUT_DISABLED);
 
     NVIC_SetPriority(SSP1_IRQn, NVIC_PRIO_HOST_SSP);
     NVIC_ClearPendingIRQ(SSP1_IRQn);
@@ -176,6 +183,14 @@ InitDriverSPI(void)
     // De-assert SSP0 reset signal
     LPC_SYSCON->PRESETCTRL |= PRESETCTRL_SSP0_RST_N;
 
+    // Set SSP0 configuration and start SSP0
+    LPC_SSP0->CPSR = SystemCoreClock / DRIVER_SPI_CLK;
+    LPC_SSP0->CR0 = SSP_CR0(
+            16, SSP_FRF_SPI, SSP_CPOL_LO, SSP_CPHA_AWAY_FROM, 0);
+    LPC_SSP0->CR1 = SSP_CR1(
+            SSP_LBM_NORMAL, SSP_SSE_ENABLED, SSP_MS_MASTER,
+            SSP_SOD_NORMAL);
+
     // LED_SIN      pin 18 (PIO0_9/MOSI0/CT16B0_MAT1)
     LPC_IOCON->LED_SIN_PIO = IOCon_Digital(IOCON_FUNC_1, IOCON_MODE_INACTIVE,
             IOCON_HYS_DISABLED, IOCON_INV_NORMAL, IOCON_OD_DISABLED);
@@ -185,14 +200,6 @@ InitDriverSPI(void)
     // LED_LATCH    pin 8 (PIO0_2/SSEL0/CT16B0_CAP0)
     LPC_IOCON->LED_LATCH_PIO = IOCon_Digital(IOCON_FUNC_1, IOCON_MODE_INACTIVE,
             IOCON_HYS_DISABLED, IOCON_INV_NORMAL, IOCON_OD_DISABLED);
-
-    // Set SSP0 configuration and start SSP0
-    LPC_SSP0->CPSR = SystemCoreClock / DRIVER_SPI_CLK;
-    LPC_SSP0->CR0 = SSP_CR0(
-            16, SSP_FRF_SPI, SSP_CPOL_LO, SSP_CPHA_AWAY_FROM, 0);
-    LPC_SSP0->CR1 = SSP_CR1(
-            SSP_LBM_NORMAL, SSP_SSE_ENABLED, SSP_MS_MASTER,
-            SSP_SOD_NORMAL);
 }
 
 static void
@@ -203,17 +210,19 @@ InitDriverTimer(void)
 
     LPC_CT32B0->IR = CT32B0_IR_MR0INT | CT32B0_IR_MR1INT | CT32B0_IR_MR2INT |
             CT32B0_IR_MR3INT | CT32B0_IR_CR0INT | CT32B0_IR_CR1INT;
-    LPC_CT32B0->MCR = CT32B0_MCR_MR0I | CT32B0_MCR_MR0R;
-    LPC_CT32B0->MR0 = 0;
-    LPC_CT32B0->PC = 0;
-    // Set timer to run at DRIVER_LINE_CLK
-    LPC_CT32B0->PR = SystemCoreClock / DRIVER_LINE_CLK - 1;
-    LPC_CT32B0->TC = 0;
-    LPC_CT32B0->TCR = CT32B0_TCR(CT32B0_CEN_ENABLED, CT32B0_CRST_NORMAL);
-
-    NVIC_SetPriority(TIMER_32_0_IRQn, NVIC_PRIO_HOST_SSP);
+    NVIC_SetPriority(TIMER_32_0_IRQn, NVIC_PRIO_DRIVER_TIMER);
     NVIC_ClearPendingIRQ(TIMER_32_0_IRQn);
     NVIC_EnableIRQ(TIMER_32_0_IRQn);
+
+    LPC_CT32B0->MCR = CT32B0_MCR_MR0I | CT32B0_MCR_MR0R | CT32B0_MCR_MR1R;
+    LPC_CT32B0->MR0 = 1;
+    LPC_CT32B0->MR1 = (1 << (BITS - 1)) * 2; // safeguard
+    LPC_CT32B0->PC = 0;
+    // Set timer to run at DRIVER_LINE_CLK
+    LPC_CT32B0->PR = SystemCoreClock / DRIVER_LINE_CLK / 2 - 1;
+    LPC_CT32B0->TC = 0;
+    LPC_CT32B0->TCR = CT32B0_TCR(CT32B0_CEN_ENABLED, CT32B0_CRST_RESET);
+    LPC_CT32B0->TCR = CT32B0_TCR(CT32B0_CEN_ENABLED, CT32B0_CRST_NORMAL);
 }
 
 static void
@@ -318,7 +327,7 @@ SetFrameData(uintptr_t data)
     gamma_pixel_t pixel;
     gamma_pixel_t (*src_line)[WIDTH] = g_src_program_line;
 
-    *(g_src_incoming_pixel++) = CorrectGamma((pixel_t)data);
+    *(g_src_incoming_pixel++) = ~CorrectGamma((pixel_t)data);
     if (g_src_incoming_pixel > *src_line &&
             g_src_incoming_pixel <= *(src_line + 1)) {
         // First line
@@ -326,7 +335,11 @@ SetFrameData(uintptr_t data)
             return;
         }
     }
-    if (g_src_incoming_pixel == *src_line) {
+    if (g_src_incoming_pixel == *src_line ||
+            g_src_incoming_pixel == g_src_buffers[SRC_BUFFERS]) {
+        if (*src_line == g_src_buffers[0]) {
+            src_line = &g_src_buffers[SRC_BUFFERS];
+        }
         g_src_program_line = --src_line;
         g_src_incoming_pixel = *(src_line - 1);
         if (*src_line == g_src_buffers[0]) {
@@ -334,27 +347,27 @@ SetFrameData(uintptr_t data)
         }
         // Calculate the first entry of the program
         line = 0;
-        shift = BITS;
+        shift = 0;
         for (i = CHANNELS * WIDTH - 1; i >= 0; --i) {
             pixel = (*src_line)[i / 2];
             pixel = (i & 1) ? (pixel >> 16) : pixel;
-            line |= ((!(pixel & (1 << (--shift)))) << i);
-            shift = !shift ? shift : BITS;
+            line |= ((!(pixel & (1 << shift))) << i);
+            shift = (shift == (BITS - 1)) ? 0 : (shift + 1);
         }
         g_src_program_index = 0;
         *(--g_stage_line) = (line_t)line;
     } else {
-        line = (uintptr_t)g_stage_line;
+        line = (uintptr_t)*g_stage_line;
         i = g_src_program_index;
-        shift = PROGRAM_SIZE - i;
+        shift = PROGRAM_SIZE - i - 1;
         shift = shift > PROGRAM_STEP ? PROGRAM_STEP : shift;
         for (; shift; --shift, ++i) {
             intptr_t pos = g_program_pos[i];
+            intptr_t bit = g_program_bit[i];
             for (; pos >= 0; pos -= BITS) {
                 pixel = (*src_line)[pos / 2];
                 pixel = (pos & 1) ? (pixel >> 16) : pixel;
-                line = (line & ~(1 << pos)) |
-                        ((!(pixel & g_program_bit[i])) << pos);
+                line = (line & ~(1 << pos)) | ((!(pixel & bit)) << pos);
             }
             *(--g_stage_line) = (line_t)line;
         }
@@ -371,7 +384,7 @@ FillFrame(uintptr_t data)
     intptr_t i, j;
     for (j = LINES; j > 0; --j) {
         for (i = WIDTH; i > 0; --i) {
-            SetFrameData(data); // Digest last line received
+            SetFrameData(data);
         }
     }
 }
@@ -397,9 +410,10 @@ void
 TIMER32_0_IRQHandler(void)
 {
     LPC_SSP0->DR = (uint32_t)(*(--g_frame_line));
-
     LPC_CT32B0->IR = CT32B0_IR_MR0INT;
+    LPC_CT32B0->TC = (uintptr_t)(-1);
     LPC_CT32B0->MR0 = (uint32_t)(*(--g_frame_interval));
+
     if (g_frame_interval != g_program_interval) {
         return;
     }
@@ -480,6 +494,10 @@ SSP1_IRQHandler(void)
 int
 main(void)
 {
+#ifdef DEMO
+    uintptr_t data = 0xa5a5;
+#endif
+
     __disable_irq();
     SCB->SCR |= SCB_SCR_SLEEPONEXIT_Msk;
     InitFrame();
@@ -503,12 +521,15 @@ main(void)
         __WFI();
 #else
         uintptr_t i;
-#define DELAY do for (i = SystemCoreClock / 1000; i; --i) { __NOP(); } while(0)
+#define DELAY do for (i = SystemCoreClock / 10000; i; --i) { __NOP(); } while(0)
         DELAY;
-        LPC_SSP0->DR = rand() & 0x0000FFFF;
+        LPC_SSP0->DR = data; //rand() & 0x0000FFFF;
         LPC_GPIO->NOT[CSEL0_PORT] = (uint32_t)*(--g_frame_csel);
         if (g_frame_csel == g_program_csel) {
             g_frame_csel = &g_program_csel[LINES];
+        }
+        if (LPC_SSP1->MIS & (SSP_IMSC_RTIM | SSP_IMSC_RXIM)) {
+            data = LPC_SSP1->DR;
         }
 #undef DELAY
 #endif

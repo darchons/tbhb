@@ -33,11 +33,11 @@ CorrectGamma(pixel_t pixel) {
     uintptr_t green = (((uintptr_t)pixel) & 0xff00) + 0x100;
     return ((((uintptr_t)(red * red) - 1) >> (16 - BITS)) |
             (((uintptr_t)(green * green) - 0x10000) >> (16 - BITS))) &
-            (((1 << BITS) - 1) | ((0x10000 << BITS) - 1));
+            (((1 << BITS) - 1) | ((0x10000 << BITS) - 0x10000));
 }
 
 // Size of a timer program for one line
-#define PROGRAM_SIZE    (((BITS + 1) * BITS) + 1)
+#define PROGRAM_SIZE    (((BITS - 1) * BITS) + 1)
 
 // Size of program to generate per received pixel, excluding first program
 //  program entry and final received pixel in a line (see SetFrameData)
